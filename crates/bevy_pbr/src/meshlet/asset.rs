@@ -34,9 +34,9 @@ pub struct MeshletBoundingSphere {
     pub radius: f32,
 }
 
-pub struct MeshletMeshSaverLoad;
+pub struct MeshletMeshLoader;
 
-impl AssetLoader for MeshletMeshSaverLoad {
+impl AssetLoader for MeshletMeshLoader {
     type Asset = MeshletMesh;
     type Settings = ();
     type Error = bincode::Error;
@@ -59,10 +59,12 @@ impl AssetLoader for MeshletMeshSaverLoad {
     }
 }
 
-impl AssetSaver for MeshletMeshSaverLoad {
+pub struct MeshletMeshSaver;
+
+impl AssetSaver for MeshletMeshSaver {
     type Asset = MeshletMesh;
     type Settings = ();
-    type OutputLoader = Self;
+    type OutputLoader = MeshletMeshLoader;
     type Error = bincode::Error;
 
     fn save<'a>(

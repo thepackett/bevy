@@ -19,7 +19,7 @@ pub use self::asset::{Meshlet, MeshletBoundingSphere, MeshletMesh};
 pub use self::from_mesh::MeshToMeshletMeshConversionError;
 
 use self::{
-    asset::MeshletMeshSaverLoad,
+    asset::MeshletMeshLoader,
     gpu_scene::{
         extract_meshlet_meshes, perform_pending_meshlet_mesh_writes,
         prepare_meshlet_per_frame_resources, prepare_meshlet_view_bind_groups,
@@ -104,7 +104,7 @@ impl Plugin for MeshletPlugin {
         );
 
         app.init_asset::<MeshletMesh>()
-            .register_asset_loader(MeshletMeshSaverLoad)
+            .register_asset_loader(MeshletMeshLoader)
             .insert_resource(Msaa::Off);
     }
 

@@ -5,17 +5,23 @@
 
 #![warn(missing_docs)]
 
+use std::any::TypeId;
+
 #[cfg(feature = "bevy_animation")]
 use bevy_animation::AnimationClip;
-use bevy_utils::HashMap;
+use bevy_utils::{hashbrown::Equivalent, HashMap};
 
 mod loader;
+mod saver;
 mod vertex_attributes;
+mod extensions;
 pub use loader::*;
+pub use saver::*;
+
 
 use bevy_app::prelude::*;
-use bevy_asset::{Asset, AssetApp, Handle};
-use bevy_ecs::{prelude::Component, reflect::ReflectComponent};
+use bevy_asset::{Asset, AssetApp, Handle, UntypedHandle};
+use bevy_ecs::{prelude::Component, reflect::ReflectComponent, world::World};
 use bevy_pbr::StandardMaterial;
 use bevy_reflect::{Reflect, TypePath};
 use bevy_render::{
@@ -28,6 +34,7 @@ use bevy_scene::Scene;
 /// Adds support for glTF file loading to the app.
 #[derive(Default)]
 pub struct GltfPlugin {
+    //extensions: Vec<dyn GltfExtension>,
     custom_vertex_attributes: HashMap<String, MeshVertexAttribute>,
 }
 
@@ -48,107 +55,142 @@ impl GltfPlugin {
     }
 }
 
-impl Plugin for GltfPlugin {
-    fn build(&self, app: &mut App) {
-        app.register_type::<GltfExtras>()
-            .init_asset::<Gltf>()
-            .init_asset::<GltfNode>()
-            .init_asset::<GltfPrimitive>()
-            .init_asset::<GltfMesh>()
-            .preregister_asset_loader::<GltfLoader>(&["gltf", "glb"]);
-    }
+// impl Plugin for GltfPlugin {
+//     fn build(&self, app: &mut App) {
+//         app.register_type::<GltfExtras>()
+//             .init_asset::<Gltf>()
+//             .init_asset::<GltfNode>()
+//             .init_asset::<GltfPrimitive>()
+//             .init_asset::<GltfMesh>()
+//             .preregister_asset_loader::<GltfLoader>(&["gltf", "glb"]);
+//     }
 
-    fn finish(&self, app: &mut App) {
-        let supported_compressed_formats = match app.world.get_resource::<RenderDevice>() {
-            Some(render_device) => CompressedImageFormats::from_features(render_device.features()),
+//     fn finish(&self, app: &mut App) {
+//         let supported_compressed_formats = match app.world.get_resource::<RenderDevice>() {
+//             Some(render_device) => CompressedImageFormats::from_features(render_device.features()),
 
-            None => CompressedImageFormats::NONE,
-        };
-        app.register_asset_loader(GltfLoader {
-            supported_compressed_formats,
-            custom_vertex_attributes: self.custom_vertex_attributes.clone(),
-        });
-    }
-}
+//             None => CompressedImageFormats::NONE,
+//         };
+//         app.register_asset_loader(GltfLoader {
+//             supported_compressed_formats,
+//             custom_vertex_attributes: self.custom_vertex_attributes.clone(),
+//         });
+//     }
+// }
 
 /// Representation of a loaded glTF file.
 #[derive(Asset, Debug, TypePath)]
+pub struct RawGltf {
+    pub world: World,
+}
+
+
+impl RawGltf {
+    pub fn new() -> RawGltf{
+        RawGltf { world: World::new() }
+    }
+}
+
+/// Representation of a loaded glTF file's assets.
+#[derive(Asset, Debug, TypePath)]
 pub struct Gltf {
-    /// All scenes loaded from the glTF file.
-    pub scenes: Vec<Handle<Scene>>,
-    /// Named scenes loaded from the glTF file.
-    pub named_scenes: HashMap<String, Handle<Scene>>,
-    /// All meshes loaded from the glTF file.
-    pub meshes: Vec<Handle<GltfMesh>>,
-    /// Named meshes loaded from the glTF file.
-    pub named_meshes: HashMap<String, Handle<GltfMesh>>,
-    /// All materials loaded from the glTF file.
-    pub materials: Vec<Handle<StandardMaterial>>,
-    /// Named materials loaded from the glTF file.
-    pub named_materials: HashMap<String, Handle<StandardMaterial>>,
-    /// All nodes loaded from the glTF file.
-    pub nodes: Vec<Handle<GltfNode>>,
-    /// Named nodes loaded from the glTF file.
-    pub named_nodes: HashMap<String, Handle<GltfNode>>,
-    /// Default scene to be displayed.
-    pub default_scene: Option<Handle<Scene>>,
-    /// All animations loaded from the glTF file.
-    #[cfg(feature = "bevy_animation")]
-    pub animations: Vec<Handle<AnimationClip>>,
-    /// Named animations loaded from the glTF file.
-    #[cfg(feature = "bevy_animation")]
-    pub named_animations: HashMap<String, Handle<AnimationClip>>,
+    // Storage of all handles that were extracted. Best Accessible by typed api. E.g. gltf.get_assets::<Scene>() -> Vec<Handle<Scene>>.
+    pub assets: Vec<UntypedHandle>,
+    // Hash map of strings to vector of untyped handles since names are not guaranteed to be unique.
+    pub named_assets: HashMap<String, Vec<UntypedHandle>>,
 }
 
-/// A glTF node with all of its child nodes, its [`GltfMesh`],
-/// [`Transform`](bevy_transform::prelude::Transform) and an optional [`GltfExtras`].
-///
-/// See [the relevant glTF specification section](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-node).
-#[derive(Asset, Debug, Clone, TypePath)]
-pub struct GltfNode {
-    /// Direct children of the node.
-    pub children: Vec<GltfNode>,
-    /// Mesh of the node.
-    pub mesh: Option<Handle<GltfMesh>>,
-    /// Local transform.
-    pub transform: bevy_transform::prelude::Transform,
-    /// Additional data.
-    pub extras: Option<GltfExtras>,
-}
+impl Gltf {
+    pub fn get_assets<A: Asset>(&self) -> Vec<Handle<A>> {
+        let assets = self.assets.iter().filter_map(|handle| {
+            if handle.type_id() == TypeId::of::<A>() {
+                Some(handle.clone().typed_unchecked::<A>())
+            } else {
+                None
+            }
+        }).collect::<Vec<_>>();
+        assets
+    }
 
-/// A glTF mesh, which may consist of multiple [`GltfPrimitives`](GltfPrimitive)
-/// and an optional [`GltfExtras`].
-///
-/// See [the relevant glTF specification section](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-mesh).
-#[derive(Asset, Debug, Clone, TypePath)]
-pub struct GltfMesh {
-    /// Primitives of the glTF mesh.
-    pub primitives: Vec<GltfPrimitive>,
-    /// Additional data.
-    pub extras: Option<GltfExtras>,
-}
+    pub fn get_named_assets<A: Asset>(&self) -> Vec<(String, Handle<A>)> {
+        let assets = self.named_assets.iter().filter_map(|(name, handles)| {
+            let mut pairs = Vec::new();
+            for handle in handles {
+                if handle.type_id() == TypeId::of::<A>() {
+                    pairs.push((name.clone(), handle.clone().typed_unchecked::<A>()));
+                }
+            }
+            Some(pairs)
+        }).flatten().collect::<Vec<_>>();
+        assets
+    }
 
-/// Part of a [`GltfMesh`] that consists of a [`Mesh`], an optional [`StandardMaterial`] and [`GltfExtras`].
-///
-/// See [the relevant glTF specification section](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-mesh-primitive).
-#[derive(Asset, Debug, Clone, TypePath)]
-pub struct GltfPrimitive {
-    /// Topology to be rendered.
-    pub mesh: Handle<Mesh>,
-    /// Material to apply to the `mesh`.
-    pub material: Option<Handle<StandardMaterial>>,
-    /// Additional data.
-    pub extras: Option<GltfExtras>,
-    /// Additional data of the `material`.
-    pub material_extras: Option<GltfExtras>,
-}
+    pub fn get_assets_by_name<A: Asset>(&self, name: &str) -> Vec<Handle<A>> {
+        let assets = match self.named_assets.get(name) {
+            Some(handles) => {
+                handles.iter().filter_map(|handle| {
+                    if handle.type_id() == TypeId::of::<A>() {
+                        Some(handle.clone().typed_unchecked::<A>())
+                    } else {
+                        None
+                    }
+                }).collect::<Vec<_>>()
+            },
+            None => Vec::new(),
+        };
+        assets
+    }
 
-/// Additional untyped data that can be present on most glTF types.
-///
-/// See [the relevant glTF specification section](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-extras).
-#[derive(Clone, Debug, Reflect, Default, Component)]
-#[reflect(Component)]
-pub struct GltfExtras {
-    /// Content of the extra data.
-    pub value: String,
+    pub fn get_scenes(&self) -> Vec<Handle<Scene>> {
+        self.get_assets::<Scene>()
+    }
+
+    pub fn get_named_scenes(&self, name: &str) -> Vec<(String, Handle<Scene>)> {
+        self.get_named_assets::<Scene>()
+    }
+
+    pub fn get_scenes_by_name(&self, name: &str) -> Vec<Handle<Scene>> {
+        self.get_assets_by_name::<Scene>(name)
+    }
+
+    pub fn get_meshes(&self) -> Vec<Handle<Mesh>> {
+        self.get_assets::<Mesh>()
+    }
+
+    pub fn get_named_meshes(&self, name: &str) -> Vec<(String, Handle<Mesh>)> {
+        self.get_named_assets::<Mesh>()
+    }
+
+    pub fn get_meshes_by_name(&self, name: &str) -> Vec<Handle<Mesh>> {
+        self.get_assets_by_name::<Mesh>(name)
+    }
+
+    pub fn get_materials(&self) -> Vec<Handle<StandardMaterial>> {
+        self.get_assets::<StandardMaterial>()
+    }
+
+    pub fn get_named_materials(&self, name: &str) -> Vec<(String, Handle<StandardMaterial>)> {
+        self.get_named_assets::<StandardMaterial>()
+    }
+
+    pub fn get_materials_by_name(&self, name: &str) -> Vec<Handle<StandardMaterial>> {
+        self.get_assets_by_name::<StandardMaterial>(name)
+    }
+
+    // Feature gate animations?
+    pub fn get_animations(&self) -> Vec<Handle<AnimationClip>> {
+        self.get_assets::<AnimationClip>()
+    }
+
+    pub fn get_named_animations(&self, name: &str) -> Vec<(String, Handle<AnimationClip>)> {
+        self.get_named_assets::<AnimationClip>()
+    }
+
+    pub fn get_animations_by_name(&self, name: &str) -> Vec<Handle<AnimationClip>> {
+        self.get_assets_by_name::<AnimationClip>(name)
+    }
+
+    // Gltf nodes?
+
+    // Default scene?
 }
